@@ -5,6 +5,7 @@ import (
 	"log"
 	"math"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -61,6 +62,8 @@ type UI struct {
 	driverTable *termui.Table
 	lapsTable   *termui.Table
 
+	carPar *termui.Par
+
 	playerLaps [][4]float32
 }
 
@@ -80,13 +83,15 @@ func NewUI(dataChan <-chan f1.TelemetryData) *UI {
 		driverTable: termui.NewTable(),
 		lapsTable:   termui.NewTable(),
 
+		carPar: termui.NewPar(""),
+
 		playerLaps: [][4]float32{},
 	}
 
 	ui.initColors()
 
 	ui.speedUnit.Store(KPH)
-	ui.components = []termui.Bufferer{ui.logoPar, ui.speedPar, ui.brake, ui.throttle, ui.driverTable, ui.lapsTable}
+	ui.components = []termui.Bufferer{ui.logoPar, ui.speedPar, ui.brake, ui.throttle, ui.driverTable, ui.lapsTable, ui.carPar}
 
 	ui.logoPar.Height = 7
 	ui.logoPar.Width = 100
@@ -101,12 +106,12 @@ func NewUI(dataChan <-chan f1.TelemetryData) *UI {
     ~~~~~~~~~~~~~~~~~~/_/~~~~~/_/~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~`
 
 	ui.speedPar.Height = 6
-	ui.speedPar.Width = 56
+	ui.speedPar.Width = 60
 	ui.speedPar.X = 0
 	ui.speedPar.Y = 8
 	ui.speedPar.Border = false
 
-	ui.brake.Width = 28
+	ui.brake.Width = 30
 	ui.brake.Height = 3
 	ui.brake.X = 0
 	ui.brake.Y = 14
@@ -114,9 +119,9 @@ func NewUI(dataChan <-chan f1.TelemetryData) *UI {
 	ui.brake.BarColor = termui.ColorRed
 	ui.brake.BorderLabel = "Brakes"
 
-	ui.throttle.Width = 28
+	ui.throttle.Width = 30
 	ui.throttle.Height = 3
-	ui.throttle.X = 29
+	ui.throttle.X = 30
 	ui.throttle.Y = 14
 	ui.throttle.Border = true
 	ui.throttle.BarColor = termui.ColorGreen
@@ -124,12 +129,19 @@ func NewUI(dataChan <-chan f1.TelemetryData) *UI {
 
 	ui.driverTable.Width = 60
 	ui.driverTable.Height = 22
-	ui.driverTable.X = 58
+	ui.driverTable.X = 95
 	ui.driverTable.Y = 8
 	ui.driverTable.BorderFg = termui.ColorWhite
 	ui.driverTable.Separator = false
 
-	ui.lapsTable.Width = 56
+	ui.carPar.Height = 47
+	ui.carPar.Width = 33
+	ui.carPar.X = 61
+	ui.carPar.Y = 8
+	ui.carPar.Border = false
+	ui.carPar.Text = strings.Join(car, "\n")
+
+	ui.lapsTable.Width = 60
 	ui.lapsTable.Height = 22
 	ui.lapsTable.X = 0
 	ui.lapsTable.Y = 17
@@ -287,18 +299,28 @@ func (ui *UI) processTelemetry(telemetry f1.TelemetryData) {
 	ui.brake.Percent = int(100 * telemetry.Brake)
 	ui.throttle.Percent = int(100 * telemetry.Throttle)
 
-	sortedCars := sortCars(telemetry.Cars, telemetry.NumCars)
+	sortedCars := sortCars(telemetry.Cars)
 
 	ui.processPlayerLap(telemetry)
 	ui.renderPlayerLaps()
 
+	ui.renderCar(telemetry)
+
 	ui.renderCars(sortedCars, telemetry.TrackSize, byte(telemetry.SessionType))
+}
+
+func (ui *UI) renderCar(telemetry f1.TelemetryData) {
+	carCopy := make([]string, len(car))
+	copy(carCopy, car)
+
+	ui.carPar.Text = strings.Join(carCopy, "\n")
 }
 
 func (ui *UI) renderPlayerLaps() {
 	ui.lapsTable.Rows = make([][]string, 2+len(ui.playerLaps))
 
 	ui.lapsTable.Rows[0] = []string{
+		"#",
 		"Sector 1",
 		"Sector 2",
 		"Sector 3",
@@ -306,10 +328,11 @@ func (ui *UI) renderPlayerLaps() {
 	}
 
 	ui.lapsTable.Rows[1] = []string{
-		"----------",
-		"----------",
-		"----------",
-		"------------",
+		"--",
+		"---------",
+		"---------",
+		"---------",
+		"--------------",
 	}
 
 	lowest := []float32{
@@ -332,17 +355,17 @@ func (ui *UI) renderPlayerLaps() {
 	}
 
 	for i, lap := range ui.playerLaps {
-		s := []string{"", "", "", ""}
+		s := []string{fmt.Sprintf("%2d", i+1), "", "", "", ""}
 		for j := range lap {
 			if lap[j] > 0 {
-				s[j] = floatToTime(lap[j])
+				s[j+1] = floatToTime(lap[j])
 			}
 			if lap[j] == lowest[j] {
-				s[j] = fmt.Sprintf("[%s](fg-magenta)", s[j])
+				s[j+1] = fmt.Sprintf("[%s](fg-magenta)", s[j+1])
 			}
 			if i == len(ui.playerLaps)-1 &&
 				(j == 3 || j == 2 || lap[j+1] == 0) {
-				s[j] = fmt.Sprintf("[%s](fg-green,fg-bold)", s[j])
+				s[j+1] = fmt.Sprintf("[%s](fg-green)", s[j+1])
 			}
 		}
 		ui.lapsTable.Rows[i+2] = s
@@ -424,8 +447,8 @@ func (ui *UI) renderCars(sortedCars []f1.CarData, trackSize float32, sessionType
 	}
 }
 
-func sortCars(cars [20]f1.CarData, numCars byte) []f1.CarData {
-	sortedCars := make([]f1.CarData, numCars)
+func sortCars(cars [20]f1.CarData) []f1.CarData {
+	sortedCars := make([]f1.CarData, 20)
 	for _, car := range cars {
 		if car.CarPosition == 0 {
 			continue
